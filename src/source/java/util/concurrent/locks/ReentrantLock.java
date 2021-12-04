@@ -129,18 +129,21 @@ public class ReentrantLock implements Lock, java.io.Serializable {
          * Performs non-fair tryLock.  tryAcquire is implemented in
          * subclasses, but both need nonfair try for trylock method.
          */
-        final boolean nonfairTryAcquire(int acquires) {
+        final boolean nonfairTryAcquire(int acquires) { // acquire = 1
             // 获取当前线程
             final Thread current = Thread.currentThread();
             // 获取当前锁的状态
             int c = getState();
             // 如果锁的状态是0的话，就表明还没有线程获得这个锁
+            // 如果当前没有加锁的话
             if (c == 0) {
+                // 这里可能产生并发，尝试CAS方式去修改state为1
                 if (compareAndSetState(0, acquires)) {
+                    // 设置当前 独占锁 拥有者 为当前线程
                     setExclusiveOwnerThread(current);
                     return true;
                 }
-            } else if (current == getExclusiveOwnerThread()) {    // 如果获取锁的线程是当前线程
+            } else if (current == getExclusiveOwnerThread()) {    // 当前state不为0，则判断当前线程是否是之前加上锁的线程
                 // 可重入锁，更新获取锁的次数
                 int nextc = c + acquires;
                 if (nextc < 0) // overflow

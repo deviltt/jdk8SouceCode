@@ -614,14 +614,25 @@ public abstract class AbstractQueuedSynchronizer
      * @return node's predecessor
      */
     private Node enq(final Node node) {
+        /*
+        高并发场景下会有很多的CAS失败操作，而下面的死循环确保节点一定要插进队列中。上面的代码和
+        enq方法中的代码是类似的，也就是说上面操作是为了做快速修改，如果失败了，在enq方法做兜底
+         */
         for (; ; ) {    // 注意这里是无限循环，只有return返回的时候会跳出循环
             Node t = tail;
+            // 如果尾节点为null，说明此时CLH队列为空，需要初始化队列
             if (t == null) { // Must initialize
+                // 创建一个空的Node节点，并将头节点CAS指向它
                 if (compareAndSetHead(new Node()))
+                    // 同时将尾节点也指向这个新的节点
                     tail = head;
             } else {
-                // 当tail不为空后，把node节点插到tail节点后面，并更新tail节点为node
-                // 如果 尾节点不为null，则当前线程会一直重试，将自己添加到队列的尾部
+                /*
+                当tail不为空后，把node节点插到tail节点后面，并更新tail节点为node
+                如果 尾节点不为null，则当前线程会一直重试，将自己添加到队列的尾部
+                如果CLH队列此时不为空，则像之前一样用尾插的方式插入该节点
+                如果有多个线程想要插入，由于CAS只有一个线程会插入成功，失败的线程会循环，直到CAS使tail指向自己就退出
+                 */
                 node.prev = t;
                 if (compareAndSetTail(t, node)) {
                     t.next = node;
@@ -633,18 +644,22 @@ public abstract class AbstractQueuedSynchronizer
 
     /**
      * Creates and enqueues node for current thread and given mode.
+     * 在CLH队列中添加一个新的独占尾节点
      *
      * @param mode Node.EXCLUSIVE for exclusive, Node.SHARED for shared
      * @return the new node
      */
     private Node addWaiter(Node mode) {
         // Node node = new Node(Thread, mode) 说明一个线程代表一个节点
+        // 把当前线程构建为一个新的节点
         Node node = new Node(Thread.currentThread(), mode);
         // Try the fast path of enq; backup to full enq on failure
         Node pred = tail;
-        if (pred != null) { //
+        // 判断当前尾节点是否为null？不为null说明此时队列中有节点
+        if (pred != null) {
+            // 把当前新建的节点用尾插的方式来插入
             node.prev = pred;
-            // 设置新的节点为尾节点
+            // CAS的方式将尾节点tail指向当前节点
             if (compareAndSetTail(pred, node)) {
                 pred.next = node;
                 return node;
@@ -652,6 +667,11 @@ public abstract class AbstractQueuedSynchronizer
         }
         // 尾节点为空，说明队列还未初始化，需要初始化head节点并入队新节点
         // 或者 当前节点为尾节点失败
+        /*
+        走到这步有两种可能：
+        1.尾节点为空（即此时队列为空），需要将队列初始化后插入当前节点
+        2.在第652行CAS失败后，会进入enq兜底方法
+         */
         enq(node);
         return node;
     }
@@ -842,7 +862,7 @@ public abstract class AbstractQueuedSynchronizer
      */
     private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {
         int ws = pred.waitStatus;
-        // 只有SIGNAL状态才能阻塞线程
+        // 只有前一个节点是SIGNAL状态才能阻塞当前线程
         // 前驱节点状态是-1的时候才能安心的休眠，否则要一直向前找，直到找到waitStatus是-1的节点
         if (ws == Node.SIGNAL)
             /*
@@ -856,7 +876,10 @@ public abstract class AbstractQueuedSynchronizer
              * indicate retry.
              */
             do {
-                // 不断向前找，直到找到一个状态码小于0，也就是非cancel
+                /*
+                从该节点向前寻找一个不是CANCELED状态的节点（也就是处于正常阻塞状态的节点），
+                遍历过程中如果遇到了CANCELED节点，CANCELED的节点会被剔除CLH队列等待Gc
+                 */
                 node.prev = pred = pred.prev;
             } while (pred.waitStatus > 0);
             // 跳出循环只有两种情况，小于0或者等于0
@@ -869,7 +892,13 @@ public abstract class AbstractQueuedSynchronizer
              * need a signal, but don't park yet.  Caller will need to
              * retry to make sure it cannot acquire before parking.
              */
-            // 如果前驱节点的状态是小于0的，CAS方法将前驱节点的状态更新为SIGNAL，同时不对线程阻塞
+            /*
+            如果前一个节点的状态是初始状态0或者是传播状态PROPAGATE时，CAS去修改其状态为SIGNAL，
+            因为当前节点最后是要被阻塞的，所以前一个节点的状态必须改为SIGNAL
+            走到这里最后会返回false，因为外面还有一层死循环，如果最后还能跳到这个方法里面的话，
+            如果之前CAS修改成功的话就直接走进第一个if条件里面，返回true。然后当前线程被阻塞
+            CAS失败的话会再次进入到该分支中做修改
+             */
             compareAndSetWaitStatus(pred, ws, Node.SIGNAL);
         }
         return false;
@@ -888,7 +917,15 @@ public abstract class AbstractQueuedSynchronizer
      * @return {@code true} if interrupted
      */
     private final boolean parkAndCheckInterrupt() {
+        // 当前线程会被阻塞到这行代码处，停止往下运行，等待unpark唤醒
         LockSupport.park(this);
+        /*
+        这里为什么要用Thread.interrupted呢？
+        首先要知道一点，调LockSupport.park()方法时，如果发现中断标志位为true，就会直接返回，并不会阻塞
+        所以假设当前线程中断了，退出park阻塞，没有调用interrupted方法清除中断标志为，等下次循环到921行时，
+        由于中断标志为true，所以并不会阻塞当前线程，这显然是不符合要求的
+        所以这里加Thread.interrupted的原因就是 由于中断退出当前线程，清除中断标志，线程下次走到这里时还能阻塞住
+         */
         return Thread.interrupted();
     }
 
@@ -904,27 +941,47 @@ public abstract class AbstractQueuedSynchronizer
     /**
      * Acquires in exclusive uninterruptible mode for thread already in
      * queue. Used by condition wait methods as well as acquire.
+     * 注意：本方法是整个AQS的精髓所在，完成了头节点尝试获取锁资源和其它节点被阻塞的全部过程
      *
      * @param node the node
      * @param arg  the acquire argument
      * @return {@code true} if interrupted while waiting
      */
     final boolean acquireQueued(final Node node, int arg) {
-        // 获取锁失败了，将node添加到队列末尾，然后会执行这个方法
+        // 获取锁失败了(tryAcquire)，将node添加到队列末尾(addWaiter)，然后会执行这个方法
         boolean failed = true;
         try {
             boolean interrupted = false;
             for (; ; ) {    // 无限循环，直到满足某个条件，一定意义上的自旋功能
-                final Node p = node.predecessor();  // node的前继节点
+                final Node p = node.predecessor();  // 获取当前节点的前驱节点
+                /*
+                如果前驱节点是头节点，才可以尝试获取资源，也就是实际上的CLH队列中的第一个节点
+                队列中只有第一个节点才有资格去尝试获取锁资源，如果获取到了就不用被阻塞了
+                获取到了说明在此刻，之前的资源已经被释放了（state被置为了0）
+                 */
                 if (p == head && tryAcquire(arg)) { // 如果node的前继节点是head，并且tryAcquire获取锁成功
+                    /*
+                    头指针指向当前节点，意味着该节点 将 变成一个空节点（头节点永远会指向一个空节点）
+                    因为在上一行tryAcquire方法已经成功的情况下，就可以释放CLH中的该节点了
+                     */
                     setHead(node);  // 将node设置为head
+                    // 断开前一个节点的next指针，这样它就成为了一个孤立节点，等待被GC
                     p.next = null; // help GC 原来head节点的next节点置为null
                     failed = false;
                     return interrupted;
                 }
-                // 如果node的前继节点不是head或者tryAcquire获取锁失败
+                /*
+                走到这里说明
+                1.前一个节点不是head节点
+                2.前一个节点是head节点，但是尝试加锁失败
+                此时将队列中当前节点之前的一些CANCELED状态的节点删除；前一个节点状态如果是SIGNAL时，
+                就会阻塞当前线程，这里的parkAndCheckInterrupt阻塞操作是很有意义的。因为如果不阻塞的话，
+                获取不到资源的线程可能会在这个死循环一直运行，会一直占用CPU资源
+                也就是检测到前一个节点是 SIGNAL 状态，才放心睡眠，不然不放心
+                 */
                 if (shouldParkAfterFailedAcquire(p, node) &&
                         parkAndCheckInterrupt())
+                    // 只是记录一个标志而已，不会抛出InterruptedException异常，也就是说不会响应中断
                     interrupted = true;
             }
         } finally {
@@ -1259,11 +1316,14 @@ public abstract class AbstractQueuedSynchronizer
      *            can represent anything you like.
      */
     public final void acquire(int arg) {
-        // 如果tryAcquire返回false，
-        // 那么就会先调用addWaiter方法将竞争线程加入同步队列，
-        // 然后再调用acquireQueued方法
+        // 首先尝试获取资源，如果失败了就添加一个新的独占节点，插入到CLH队列尾部
         if (!tryAcquire(arg) &&
                 acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
+            /*
+            因为本方法不是响应中断的，所以如果当前线程中断后被唤醒，就在此处继续将中断标志重新置为true
+            （SelfInterrupt方法内部就一句话："Thread.currentThread().interrupt();"），而不是会抛异常
+            （需要使用着在调用lock方法后首先通过isInterrupted方法去进行判断，是否应该执行接下来的业务代码）
+             */
             selfInterrupt();
     }
 
