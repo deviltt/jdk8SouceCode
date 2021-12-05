@@ -1430,9 +1430,16 @@ public abstract class AbstractQueuedSynchronizer
      * @return the value returned from {@link #tryRelease}
      */
     public final boolean release(int arg) {
-        // arg
+        // 释放一次锁，如果没有可重入锁的话，就进入到下面的if条件中
         if (tryRelease(arg)) {
             Node h = head;
+            /*
+            如果头节点存在且下一个节点处于阻塞状态的时候就唤醒下一个节点
+            因为在之前加锁方法中的shouldParkAfterFailedAcquire方法中，会将前一个节点的状态置为SIGNAL（
+            当前节点竞争state失败需要阻塞，只有前一个节点是SIGNAL状态的时候才能放心的阻塞）
+            所以这里判断waitStatus不为0就意味着下一个节点是阻塞状态，然后就可以唤醒了
+            如果为0就没有必要唤醒，因为下一个节点本身就是处于非阻塞状态
+             */
             if (h != null && h.waitStatus != 0)
                 unparkSuccessor(h);
             return true;
@@ -1691,7 +1698,8 @@ public abstract class AbstractQueuedSynchronizer
         // 3. s.thread == Thread.currentThread(); 头节点后继节点为当前节点自身，说明是重入方法调用lock
         // 返回true的情景，表示当前线程有前置节点，还没轮到它去获取锁，所以会把它放到队列后面
         // 1. h != t, 说明头节点有后继节点
-        // 2. s == null，说明此时正处于构造head和tail的时候，head=node，tail=null，addWaiter方法
+        // 2. s == null，说明此时正处于添加新节点的时候，pred.next = node还没执行(addWaiter方法)，
+        // 不过这个时候说明已经有节点在排队了，那出于公平原则，当前节点只能乖乖去排队
         // The correctness of this depends on head being initialized
         // before tail and on head.next being accurate if the current
         // thread is first in queue.

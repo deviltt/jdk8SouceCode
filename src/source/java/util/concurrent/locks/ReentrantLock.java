@@ -220,6 +220,9 @@ public class ReentrantLock implements Lock, java.io.Serializable {
          */
         final void lock() {
             // 将state状态从0设为1， CAS方法
+            /*
+            非公平锁不管三七二十一，上来就是干，先抢锁再说，抢不到再调用tryAcquire方法
+             */
             if (compareAndSetState(0, 1))
                 // 如果设定成功的话，则将当前线程设为 占有锁 的线程
                 setExclusiveOwnerThread(Thread.currentThread());
@@ -241,6 +244,9 @@ public class ReentrantLock implements Lock, java.io.Serializable {
         private static final long serialVersionUID = -3000897897090466540L;
 
         final void lock() {
+            /*
+            可以看到在公平锁模式下，只是调用了acquire
+             */
             acquire(1);
         }
 
