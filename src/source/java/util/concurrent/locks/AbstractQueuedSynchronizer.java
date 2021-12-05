@@ -695,6 +695,10 @@ public abstract class AbstractQueuedSynchronizer
      * Wakes up node's successor, if one exists.
      * <p>
      * 唤醒当前node，当然要保证node后面有状态小于等于0的节点
+     * 两个场景会调用这个方法：
+     * 1.{@link AbstractQueuedSynchronizer#release(int)}
+     *   {@link AbstractQueuedSynchronizer#doReleaseShared()}
+     * 2.{@link AbstractQueuedSynchronizer#cancelAcquire(Node)}
      *
      * @param node the node
      */
@@ -715,6 +719,12 @@ public abstract class AbstractQueuedSynchronizer
          * non-cancelled successor.
          */
         Node s = node.next;
+        /*
+        两个场景：
+        1.tail指向node节点，此时s=null，那么没有需要被唤醒的节点，直接返回了
+        2.tail不是指向node节点，那就要判断下一个节点的waitStatus是否被cancel了，如果被cancel了，
+        就需要向前找到第一个waitStatus<=0的节点去唤醒它
+         */
         if (s == null || s.waitStatus > 0) {
             s = null;
             // 从后往前，找到距离node最近的一个状态为 <=0 的node
@@ -723,6 +733,7 @@ public abstract class AbstractQueuedSynchronizer
                     s = t;
         }
         if (s != null)  // 如果这个node存在，直接唤醒当前这个线程
+            // 如果这个待唤醒的节点存在，就唤醒它
             LockSupport.unpark(s.thread);
     }
 
@@ -800,7 +811,8 @@ public abstract class AbstractQueuedSynchronizer
     /**
      * Cancels an ongoing attempt to acquire.
      * <p>
-     * 取消当前节点获取锁的流程
+     * 取消当前节点获取锁的流程，当出现异常的时候，就会调用cancelAcquire方法来处理异常
+     * 如果需要唤醒的节点发生了异常，此时需要唤醒下一个节点，以此来保证唤醒动作能一直传播下去
      *
      * @param node the node
      */
@@ -809,10 +821,17 @@ public abstract class AbstractQueuedSynchronizer
         if (node == null)
             return;
 
+        // 清空节点里面的线程
         node.thread = null;
 
         // Skip cancelled predecessors
         // 向前遍历，跳过状态为CANCELED的节点
+        /*
+        从该节点往前寻找一个不是CANCELED状态的节点（也就是处于正常阻塞状态的节点）
+        相当于在退出前再做次清理工作。遍历过程中如果遇到了CANCELED节点，会被剔除出CLH队列等待GC
+        这里的实现逻辑是和shouldParkAfterFailedAcquire方法中是类似的，但有一点
+        不同的是：这里并没有pred.next=node，而是延迟到了后面的CAS操作中
+         */
         Node pred = node.prev;
         while (pred.waitStatus > 0)
             node.prev = pred = pred.prev;
@@ -821,29 +840,55 @@ public abstract class AbstractQueuedSynchronizer
         // fail if not, in which case, we lost race vs another cancel
         // or signal, so no further action is necessary.
         // 记录过滤后节点的后置节点
+        /*
+        如果上面遍历时有CANCELED节点，predNext就指向pred节点的下一个cANCELED节点
+        如果上面遍历时没有CANCELED节点，predNext就指向node节点本身
+         */
         Node predNext = pred.next;
 
         // Can use unconditional write instead of CAS here.
         // After this atomic step, other Nodes can skip past us.
         // Before, we are free of interference from other threads.
+        /*
+        将当前节点状态改为CANCELED，也就是在取消获取锁资源。这里不用CAS来改变状态是可以的，
+        因为改的是CANCELED状态，其它节点遇到CANCELED状态节点是会跳过的
+         */
         node.waitStatus = Node.CANCELLED;   // 将当前节点的状态置为CANCELED
 
         // If we are the tail, remove ourselves.
+        /*
+        如果当前节点是尾节点，做两件事：
+        1.将tail节点指向当前节点前一个不是CANCELED状态的节点，即pred节点
+        2.将pred节点的next节点指向null，和node断连，node等待GC
+         */
         if (node == tail && compareAndSetTail(node, pred)) {
             // pred的后置节点是不是predNext？如果是就把pred的后置节点设为null
             compareAndSetNext(pred, predNext, null);
         } else {
             // If successor needs signal, try to set pred's next-link
             // so it will get one. Otherwise wake it up to propagate.
+            // 走到这说明当前节点不是最后一个节点
             int ws;
             if (pred != head &&
                     ((ws = pred.waitStatus) == Node.SIGNAL ||
                             (ws <= 0 && compareAndSetWaitStatus(pred, ws, Node.SIGNAL))) &&
                     pred.thread != null) {
+                /*
+                如果head指针指向的不是pred节点，并且前一个节点是SIGNAL状态（或者可以设置为SIGNAL状态），
+                并且前一个节点的thread没被清空的话，那么只需要将pred节点和当前节点的后面一个节点连接起来就行了
+                 */
                 Node next = node.next;
                 if (next != null && next.waitStatus <= 0)
                     compareAndSetNext(pred, predNext, next);
             } else {
+                /*
+                走到这的场景：
+                1.head节点指向的是pred节点
+                2.pred的waitStatus小于0但是不是SIGNAL状态，然后设置waitStatus成功，但是pred节点里面的thread是null（
+                setHead的时候会将head指向的node的thread置为空，此时是唤醒这个节点时做的操作）
+                那么就去唤醒当前节点的下一个可以被唤醒的节点，以保证即使实在发生异常的时候，CLH队列中的节点也可以一直被唤醒下去
+                当然，如果前一个节点本身就是SIGNAL状态，也是需要唤醒下一个节点的
+                 */
                 unparkSuccessor(node);
             }
 
