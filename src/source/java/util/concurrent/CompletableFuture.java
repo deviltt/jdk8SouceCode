@@ -34,23 +34,8 @@
  */
 
 package java.util.concurrent;
-import java.util.function.Supplier;
-import java.util.function.Consumer;
-import java.util.function.BiConsumer;
-import java.util.function.Function;
-import java.util.function.BiFunction;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ForkJoinTask;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.*;
 
 /**
  * A {@link Future} that may be explicitly completed (setting its
@@ -228,8 +213,9 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
 
     /** Returns true if successfully pushed c onto stack. */
     final boolean tryPushStack(Completion c) {
-        Completion h = stack;
-        lazySetNext(c, h);
+        Completion h = stack;   // h指向把当前CompletableFuture对象的stack
+        lazySetNext(c, h);  // 将新建的c的next指向原CompletableFuture对象的stack
+        // 原对象的stack指向新建的c
         return UNSAFE.compareAndSwapObject(this, STACK, h, c);
     }
 
@@ -261,6 +247,9 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
 
     /** Completes with a non-exceptional result, unless already completed. */
     final boolean completeValue(T t) {
+        // 第一、第二位置参数用于确定待操作对象在内存中的具体位置
+        // 然后取出值和第三个参数进行比较，如果相等，则将内存中的值更新为第四个参数的值
+        // 修改成功返回true
         return UNSAFE.compareAndSwapObject(this, RESULT, null,
                                            (t == null) ? NIL : t);
     }
@@ -478,13 +467,15 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
                (f != this && (h = (f = this).stack) != null)) {
             CompletableFuture<?> d; Completion t;
             if (f.casStack(h, t = h.next)) {
-                if (t != null) {
-                    if (f != this) {
-                        pushStack(h);
+                if (t != null) {    // 表示出栈的h不是最后一个元素
+                    if (f != this) {    // f不是this，即不是当前栈
+                        pushStack(h);   // 将f出战的元素h压入当前的栈，为了避免递归层次太深？？？
                         continue;
                     }
                     h.next = null;    // detach
                 }
+                // tryFire就是触发当前栈的栈顶h被执行，完成之后又返回依赖h的其它completableFuture
+                // 使其通过while循环继续触发依赖它的其余节点任务的执行
                 f = (d = h.tryFire(NESTED)) == null ? this : d;
             }
         }
@@ -580,6 +571,14 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     @SuppressWarnings("serial")
     static final class UniApply<T,V> extends UniCompletion<T,V> {
         Function<? super T,? extends V> fn;
+
+        /**
+         *
+         * @param executor 线程池
+         * @param dep 新建的CompletableFuture
+         * @param src 当前CompletableFuture对象
+         * @param fn 函数表达式
+         */
         UniApply(Executor executor, CompletableFuture<V> dep,
                  CompletableFuture<T> src,
                  Function<? super T,? extends V> fn) {
@@ -1614,6 +1613,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     static <U> CompletableFuture<U> asyncSupplyStage(Executor e,
                                                      Supplier<U> f) {
         if (f == null) throw new NullPointerException();
+        // new 一个新的CompletableFuture
         CompletableFuture<U> d = new CompletableFuture<U>();
         e.execute(new AsyncSupply<U>(d, f));
         return d;
