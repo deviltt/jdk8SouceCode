@@ -180,6 +180,9 @@ public class CountDownLatch {
                 // 为0说明countDown的时候state已经是0了，已经没有必要让等待队列出列了，已经出列了
                 if (c == 0)
                     return false;
+                // CountDownLatch没调用一次countDown，就会把state-1，当最后一个调用
+                // countDown后，state变成了0，然后就会调用AQS的doReleaseShared，
+                // 把等待队列里下一个park的节点unpark唤醒
                 int nextc = c-1;
                 if (compareAndSetState(c, nextc))
                     return nextc == 0;

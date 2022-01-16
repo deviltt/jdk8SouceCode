@@ -187,9 +187,10 @@ public class CyclicBarrier {
      * Called only while holding lock.
      */
     private void breakBarrier() {
+        // 只有在这个方法里会置broken为true，标志这次屏障失败了
         generation.broken = true;
         count = parties;
-        trip.signalAll();
+        trip.signalAll();   // 然后唤醒条件队列里阻塞的实例
     }
 
     /**
@@ -204,9 +205,12 @@ public class CyclicBarrier {
         try {
             final Generation g = generation;
 
+            // 一进来先提前判断一下这次屏障是否被broken掉了
+            // 相对放在后面，提前broken的场景会节约一些资源
             if (g.broken)
                 throw new BrokenBarrierException();
 
+            // 在获取锁后如果被中断了，则直接中断这次屏障
             if (Thread.interrupted()) {
                 breakBarrier();
                 throw new InterruptedException();
