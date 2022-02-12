@@ -278,8 +278,10 @@ public class ScheduledThreadPoolExecutor
         private void setNextRunTime() {
             long p = period;
             if (p > 0)
+                // time = n * p，以period为单位的均匀间隔
                 time += p;
             else
+                // time = now + delay，每次都是执行完上个后再加delay
                 time = triggerTime(-p);
         }
 
@@ -535,6 +537,7 @@ public class ScheduledThreadPoolExecutor
                                        TimeUnit unit) {
         if (command == null || unit == null)
             throw new NullPointerException();
+        // ScheduleFutureTask继承自RunnableScheduleFuture
         RunnableScheduledFuture<?> t = decorateTask(command,
                 new ScheduledFutureTask<Void>(command, null,
                         triggerTime(delay, unit)));
@@ -559,6 +562,15 @@ public class ScheduledThreadPoolExecutor
     }
 
     /**
+     * 以period为间隔周期的执行任务
+     * 如果上个任务执行时间小于period，则会等到period时间后再去执行下个任务
+     * 如果上个任务执行时间大于period，等上个任务执行完后，会立马执行下个任务，不会再等period时间
+     * scheduleWithFixedDelay与这个不同的是，不管上个任务执行多久，等其结束后都会等period时间后再执行下个任务
+     *
+     * @param command 要执行的周期任务
+     * @param initialDelay 初始启动执行的延时时间
+     * @param period 两个任务执行的时间间隔
+     * @param unit 指定时间单位
      * @throws RejectedExecutionException {@inheritDoc}
      * @throws NullPointerException       {@inheritDoc}
      * @throws IllegalArgumentException   {@inheritDoc}
@@ -577,12 +589,15 @@ public class ScheduledThreadPoolExecutor
                         triggerTime(initialDelay, unit),
                         unit.toNanos(period));
         RunnableScheduledFuture<Void> t = decorateTask(command, sft);
+        // 记录任务，等周期执行的时候再放到workQueue中
         sft.outerTask = t;
         delayedExecute(t);
         return t;
     }
 
     /**
+     *
+     *
      * @throws RejectedExecutionException {@inheritDoc}
      * @throws NullPointerException       {@inheritDoc}
      * @throws IllegalArgumentException   {@inheritDoc}
