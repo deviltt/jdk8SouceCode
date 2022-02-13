@@ -1467,6 +1467,11 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
             c = ctl.get();
         }
         // 如果当前线程数大于核心线程数(corePoolSize)，则把线程加入缓冲队列
+        /*
+            这里注意CachedThreadPool线程池:
+            1.如果没有空闲的Worker，SynchronousQueue的offer操作必然立马返回false
+            2.如果有空闲的Worker，说明Worker正阻塞在take上，执行offer恰好返回true，当次任务可以被空闲Worker消费
+         */
         if (isRunning(c) && workQueue.offer(command)) {
             int recheck = ctl.get();
             if (!isRunning(recheck) && remove(command))
