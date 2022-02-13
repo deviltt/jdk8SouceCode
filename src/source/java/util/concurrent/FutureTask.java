@@ -187,22 +187,28 @@ public class FutureTask<V> implements RunnableFuture<V> {
      */
     public V get() throws InterruptedException, ExecutionException {
         int s = state;
+        // 如果FutureTask还没有完成，
         if (s <= COMPLETING)
             s = awaitDone(false, 0L);
+        // 到这说明是 > COMPLETING 状态的
         return report(s);
     }
 
     /**
+     * 带超时时间的，如果指定时间内没有获取到结果就抛出异常
      * @throws CancellationException {@inheritDoc}
      */
     public V get(long timeout, TimeUnit unit)
         throws InterruptedException, ExecutionException, TimeoutException {
-        if (unit == null)
+        if (unit == null)   // 必须指定时间单位
             throw new NullPointerException();
         int s = state;
+        // 如果状态小于COMPLETING则调用awaitDone，时间到后还没有结果即状态还是COMPLETING则直接抛出超时异常
+        // 如果状态等于COMPLETING，说明callable.run方法已经结束了，已经进入了set方法，set成功的话就会设置为NORMAL状态
         if (s <= COMPLETING &&
             (s = awaitDone(true, unit.toNanos(timeout))) <= COMPLETING)
             throw new TimeoutException();
+        // 如果大于COMPLETING则上报结果
         return report(s);
     }
 
@@ -395,6 +401,7 @@ public class FutureTask<V> implements RunnableFuture<V> {
      */
     private int awaitDone(boolean timed, long nanos)
         throws InterruptedException {
+        // 当前时间 + 超时时间
         final long deadline = timed ? System.nanoTime() + nanos : 0L;
         WaitNode q = null;
         boolean queued = false;
@@ -405,27 +412,38 @@ public class FutureTask<V> implements RunnableFuture<V> {
             }
 
             int s = state;
+            // 如果状态已经大于COMPLETING了，直接返回
+            // 说明在执行到这步时，任务run方法恰好已经改变了state状态，这样直接返回
             if (s > COMPLETING) {
                 if (q != null)
                     q.thread = null;
                 return s;
             }
             else if (s == COMPLETING) // cannot time out yet
+                // 等于COMPLETING，说明已经run结束了，进入set方法，set成功后就设置为NORMAL状态
+                // 所以如果一直没有改变，仍然是COMPLETING状态，直接让出线程
                 Thread.yield();
             else if (q == null)
+                // 第一次肯定是null，然后创建一个等待节点，继续for循环
                 q = new WaitNode();
             else if (!queued)
+                // 注意这里的期望值是表达式 q.next = waiters，实际上期望值是waiters
+                // waiters指向q，实际上就是头插法，新建的节点.next 指向 q，然后waiters指向新节点
+                // 然后继续for循环
                 queued = UNSAFE.compareAndSwapObject(this, waitersOffset,
                                                      q.next = waiters, q);
             else if (timed) {
                 nanos = deadline - System.nanoTime();
-                if (nanos <= 0L) {
+                if (nanos <= 0L) {  // nanos小于0说明超时啦
+                    // 走到这说明肯定是NEW状态，callable.run方法一直没有结束
                     removeWaiter(q);
                     return state;
                 }
+                // nanos > 0说明还没有超时，再等待nanos秒
                 LockSupport.parkNanos(this, nanos);
             }
             else
+                // 如果不设置超时，那会一直等下去，直到发生异常或者调用了unPark
                 LockSupport.park(this);
         }
     }
