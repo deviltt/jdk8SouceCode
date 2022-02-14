@@ -36,23 +36,11 @@
 package java.util.concurrent;
 
 import java.lang.Thread.UncaughtExceptionHandler;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
-import java.util.concurrent.AbstractExecutorService;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.RunnableFuture;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import java.security.AccessControlContext;
-import java.security.ProtectionDomain;
 import java.security.Permissions;
+import java.security.ProtectionDomain;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * An {@link ExecutorService} for running {@link ForkJoinTask}s.
@@ -749,21 +737,33 @@ public class ForkJoinPool extends AbstractExecutorService {
     // Constants shared across ForkJoinPool and WorkQueue
 
     // Bounds
+    // 用于获取保存在config属性低16位中的parallelism属性
     static final int SMASK        = 0xffff;        // short bits == max index
+    // parallelism属性的最大值
     static final int MAX_CAP      = 0x7fff;        // max #workers - 1
+    // 跟SMASK相比，最后一位是0而不是1，用来计算遍历workQueue的步长
     static final int EVENMASK     = 0xfffe;        // even short bits
+    // 取值是126，二进制表示是1111 1110，WorkerQueue数组元素个数的最大值
     static final int SQMASK       = 0x007e;        // max 64 (even) slots
 
     // Masks and units for WorkQueue.scanState and ctl sp subfield
+    // WorkQueue.scanState 属性中表示状态的位
+    // 最低位为1表示关联的Worker线程正在扫描获取待执行的任务，为0表示正在执行任务
     static final int SCANNING     = 1;             // false when running tasks
+
+    //最高位为1表示当前WorkQueue为非激活状态，刚创建时状态就是INACTIVE，可通过signalWork方法将其变成激活状态
+    //最高位为0表示当前WorkQueue为激活状态
     static final int INACTIVE     = 1 << 31;       // must be negative
+
+    //一个自增值，ctl属性的低32位加上SS_SEQ，计算一个新的scanState
     static final int SS_SEQ       = 1 << 16;       // version count
 
     // Mode bits for ForkJoinPool.config and WorkQueue.config
+    // ForkJoinPool.config 和 WorkQueue.config 属性中，高16位表示队列的模式
     static final int MODE_MASK    = 0xffff << 16;  // top half of int
-    static final int LIFO_QUEUE   = 0;
-    static final int FIFO_QUEUE   = 1 << 16;
-    static final int SHARED_QUEUE = 1 << 31;       // must be negative
+    static final int LIFO_QUEUE   = 0;  //后进先出模式
+    static final int FIFO_QUEUE   = 1 << 16;    // 先进先出模式
+    static final int SHARED_QUEUE = 1 << 31;    // 共享模式 must be negative
 
     /**
      * Queues supporting work-stealing as well as external task
@@ -1250,6 +1250,7 @@ public class ForkJoinPool extends AbstractExecutorService {
     /**
      * Creates a new ForkJoinWorkerThread. This factory is used unless
      * overridden in ForkJoinPool constructors.
+     * 创建ForkJoinWorkerThread的工厂类
      */
     public static final ForkJoinWorkerThreadFactory
         defaultForkJoinWorkerThreadFactory;
@@ -1257,6 +1258,7 @@ public class ForkJoinPool extends AbstractExecutorService {
     /**
      * Permission required for callers of methods that may start or
      * kill threads.
+     * 启动或杀死线程需要的权限
      */
     private static final RuntimePermission modifyThreadPermission;
 
@@ -1265,6 +1267,7 @@ public class ForkJoinPool extends AbstractExecutorService {
      * construction exception, but internal usages null-check on use
      * to paranoically avoid potential initialization circularities
      * as well as to simplify generated code.
+     * common线程池
      */
     static final ForkJoinPool common;
 
@@ -1273,16 +1276,19 @@ public class ForkJoinPool extends AbstractExecutorService {
      * when common pool threads are disabled, we allow the underlying
      * common.parallelism field to be zero, but in that case still report
      * parallelism as 1 to reflect resulting caller-runs mechanics.
+     * common线程池的parallelism属性
      */
     static final int commonParallelism;
 
     /**
      * Limit on spare thread construction in tryCompensate.
+     * 限制最大的线程数，默认为常量DEFAULT_COMMON_MAX_SPARES，256
      */
     private static int commonMaxSpares;
 
     /**
      * Sequence number for creating workerNamePrefix.
+     * 生成poolId使用
      */
     private static int poolNumberSequence;
 
@@ -1304,11 +1310,13 @@ public class ForkJoinPool extends AbstractExecutorService {
      * aggressive shrinkage during most transient stalls (long GCs
      * etc).
      */
+    // Worker线程的空闲时间，单位是纳秒
     private static final long IDLE_TIMEOUT = 2000L * 1000L * 1000L; // 2sec
 
     /**
      * Tolerance for idle timeouts, to cope with timer undershoots
      */
+    // 允许的阻塞时间误差
     private static final long TIMEOUT_SLOP = 20L * 1000L * 1000L;  // 20ms
 
     /**
@@ -1318,6 +1326,7 @@ public class ForkJoinPool extends AbstractExecutorService {
      * OS thread limits, so allows JVMs to catch misuse/abuse
      * before running out of resources needed to do so.
      */
+    // commonMaxSpares的初始值，线程池中线程数的最大值
     private static final int DEFAULT_COMMON_MAX_SPARES = 256;
 
     /**
@@ -1332,12 +1341,14 @@ public class ForkJoinPool extends AbstractExecutorService {
      * If/when MWAIT-like intrinsics becomes available, they
      * may allow quieter spinning.
      */
+    // 自旋等待的次数，设置成0可减少对CPU的占用，且没有对应的方法可以修改SPINS属性
     private static final int SPINS  = 0;
 
     /**
      * Increment for seed generators. See class ThreadLocal for
      * explanation.
      */
+    // 生成随机数的种子
     private static final int SEED_INCREMENT = 0x9e3779b9;
 
     /*
@@ -1364,37 +1375,62 @@ public class ForkJoinPool extends AbstractExecutorService {
      */
 
     // Lower and upper word masks
+    // 获取低32位的值
     private static final long SP_MASK    = 0xffffffffL;
+    // 获取高32位的值
     private static final long UC_MASK    = ~SP_MASK;
 
     // Active counts
+    // 活跃线程数，保存在ctl中的最高16位
     private static final int  AC_SHIFT   = 48;
     private static final long AC_UNIT    = 0x0001L << AC_SHIFT;
     private static final long AC_MASK    = 0xffffL << AC_SHIFT;
 
     // Total counts
+    // 总的线程数，保存在ctl中的第二个16位
     private static final int  TC_SHIFT   = 32;
     private static final long TC_UNIT    = 0x0001L << TC_SHIFT;
     private static final long TC_MASK    = 0xffffL << TC_SHIFT;
+    // 如果第48位为1，表示需要新增一个Worker线程
+    // 第48位对应于TC的最高位，如果为1，说明总的线程数小于parallelism属性，可以新增线程
     private static final long ADD_WORKER = 0x0001L << (TC_SHIFT + 15); // sign
 
     // runState bits: SHUTDOWN must be negative, others arbitrary powers of two
-    private static final int  RSLOCK     = 1;
-    private static final int  RSIGNAL    = 1 << 1;
-    private static final int  STARTED    = 1 << 2;
+    // runState属性不同的位表示的含义，描述线程池的状态
+    // 如果runState小于0，即最高位为1，说明线程池正在关闭的过程中
+    // 如果runState大于0，说明线程池是正常运行的
+    private static final int  RSLOCK     = 1;   // 表示已加锁
+    private static final int  RSIGNAL    = 1 << 1;  // 表示有线程等待获取锁
+    private static final int  STARTED    = 1 << 2;  // 表示线程已启动
+    // 表示线程池的状态是STOP，不接受新的任务且会丢弃掉任务队列中未执行的任务
     private static final int  STOP       = 1 << 29;
+    // 表示线程池已终止
     private static final int  TERMINATED = 1 << 30;
+    // 表示线程池的状态是SHUTDOWN，不接受新的任务
     private static final int  SHUTDOWN   = 1 << 31;
 
     // Instance fields
+    /*
+    最高的16位表示获取线程数，第二个16位表示总的线程数
+    如果有空闲线程，最低的16位中保存空闲线程关联的WorkQueue在WorkQueue数组中的索引
+     */
     volatile long ctl;                   // main pool control
+    // 描述线程池的状态
     volatile int runState;               // lockable status
+    // 高16位保存线程池的队列模式，FIFO或者LIFO
+    // 低16位保存线程池的parallelism属性
     final int config;                    // parallelism, mode
+    // 累加SEED_INCREMENT生成的一个随机数，决定新增的Worker对应的WorkerQueue在数组中的索引
     int indexSeed;                       // to generate worker index
+    // WorkerQueue数组
     volatile WorkQueue[] workQueues;     // main registry
+    // 生成Worker线程的工厂类
     final ForkJoinWorkerThreadFactory factory;
+    // 异常处理器
     final UncaughtExceptionHandler ueh;  // per-worker UEH
+    // 生成的Worker线程的线程名前缀
     final String workerNamePrefix;       // to create worker name string
+    // 累计的从其它WorkerQueue中偷过来的待执行的任务
     volatile AtomicLong stealCounter;    // also used as sync monitor
 
     /**
@@ -2569,6 +2605,7 @@ public class ForkJoinPool extends AbstractExecutorService {
         this.ueh = handler;
         this.config = (parallelism & SMASK) | mode;
         long np = (long)(-parallelism); // offset ctl counts
+        // todo 待理解一下这个ctl是怎么设置的
         this.ctl = ((np << AC_SHIFT) & AC_MASK) | ((np << TC_SHIFT) & TC_MASK);
     }
 
@@ -2612,8 +2649,9 @@ public class ForkJoinPool extends AbstractExecutorService {
     public <T> T invoke(ForkJoinTask<T> task) {
         if (task == null)
             throw new NullPointerException();
+        // 将新任务加入到任务队列中
         externalPush(task);
-        return task.join();
+        return task.join(); // 等待任务执行完成
     }
 
     /**
@@ -2627,6 +2665,7 @@ public class ForkJoinPool extends AbstractExecutorService {
     public void execute(ForkJoinTask<?> task) {
         if (task == null)
             throw new NullPointerException();
+        // 将新任务加入到任务队列中
         externalPush(task);
     }
 
@@ -2644,7 +2683,9 @@ public class ForkJoinPool extends AbstractExecutorService {
         if (task instanceof ForkJoinTask<?>) // avoid re-wrap
             job = (ForkJoinTask<?>) task;
         else
+            // 如果不是ForkJoinTask，则进行一层保证，转成ForkJoinTask类型
             job = new ForkJoinTask.RunnableExecuteAction(task);
+        // 将新任务加入到任务队列中
         externalPush(job);
     }
 
@@ -2661,6 +2702,7 @@ public class ForkJoinPool extends AbstractExecutorService {
     public <T> ForkJoinTask<T> submit(ForkJoinTask<T> task) {
         if (task == null)
             throw new NullPointerException();
+        // 将新任务加入到任务队列中
         externalPush(task);
         return task;
     }
@@ -2671,7 +2713,9 @@ public class ForkJoinPool extends AbstractExecutorService {
      *         scheduled for execution
      */
     public <T> ForkJoinTask<T> submit(Callable<T> task) {
+        // 适配callable任务为ForkJoinTask类型
         ForkJoinTask<T> job = new ForkJoinTask.AdaptedCallable<T>(task);
+        // 将新任务加入到任务队列中
         externalPush(job);
         return job;
     }
@@ -2682,7 +2726,9 @@ public class ForkJoinPool extends AbstractExecutorService {
      *         scheduled for execution
      */
     public <T> ForkJoinTask<T> submit(Runnable task, T result) {
+        // 适配Runnable为ForkJoinTask
         ForkJoinTask<T> job = new ForkJoinTask.AdaptedRunnable<T>(task, result);
+        // 将新任务加入到任务队列中
         externalPush(job);
         return job;
     }
@@ -2696,10 +2742,13 @@ public class ForkJoinPool extends AbstractExecutorService {
         if (task == null)
             throw new NullPointerException();
         ForkJoinTask<?> job;
+        // task如果本身就是ForkJoinTask类型，直接赋值给job
+        // 如果不是ForkJoinTask类型，则需要先适配为ForkJoinTask类型，然后赋值给job
         if (task instanceof ForkJoinTask<?>) // avoid re-wrap
             job = (ForkJoinTask<?>) task;
         else
             job = new ForkJoinTask.AdaptedRunnableAction(task);
+        // 将新任务加入到任务队列
         externalPush(job);
         return job;
     }
@@ -3396,6 +3445,7 @@ public class ForkJoinPool extends AbstractExecutorService {
         common = java.security.AccessController.doPrivileged
             (new java.security.PrivilegedAction<ForkJoinPool>() {
                 public ForkJoinPool run() { return makeCommonPool(); }});
+        // common是ForkJoinPool，config低16位表示parallelism属性，获取parallelism的数目
         int par = common.config & SMASK; // report 1 even if threads disabled
         commonParallelism = par > 0 ? par : 1;
     }
@@ -3403,6 +3453,7 @@ public class ForkJoinPool extends AbstractExecutorService {
     /**
      * Creates and returns the common pool, respecting user settings
      * specified via system properties.
+     * 创建common线程池
      */
     private static ForkJoinPool makeCommonPool() {
         int parallelism = -1;
@@ -3429,13 +3480,20 @@ public class ForkJoinPool extends AbstractExecutorService {
             if (System.getSecurityManager() == null)
                 factory = defaultForkJoinWorkerThreadFactory;
             else // use security-managed default
+            // innocuous 无害的
                 factory = new InnocuousForkJoinWorkerThreadFactory();
         }
         if (parallelism < 0 && // default 1 less than #cores
             (parallelism = Runtime.getRuntime().availableProcessors() - 1) <= 0)
+            /*
+             如果没有设置parallelism，分两种情况：
+             1.单核，默认为1
+             2.多核，cpu核数-1
+             */
             parallelism = 1;
         if (parallelism > MAX_CAP)
-            parallelism = MAX_CAP;
+            parallelism = MAX_CAP;  //如果配置的parallelism大于MAX_CAP，则为MAX_CAP，0x7fff，32767
+        // 初始化的时候创建ForkJoinPool对象，后进先出模式，
         return new ForkJoinPool(parallelism, factory, handler, LIFO_QUEUE,
                                 "ForkJoinPool.commonPool-worker-");
     }

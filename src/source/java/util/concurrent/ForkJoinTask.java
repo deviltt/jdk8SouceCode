@@ -36,21 +36,13 @@
 package java.util.concurrent;
 
 import java.io.Serializable;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
+import java.lang.reflect.Constructor;
 import java.util.Collection;
 import java.util.List;
 import java.util.RandomAccess;
-import java.lang.ref.WeakReference;
-import java.lang.ref.ReferenceQueue;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.RunnableFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantLock;
-import java.lang.reflect.Constructor;
 
 /**
  * Abstract base class for tasks that run within a {@link ForkJoinPool}.
@@ -249,11 +241,17 @@ public abstract class ForkJoinTask<V> implements Future<V>, Serializable {
 
     /** The run status of this task */
     volatile int status; // accessed directly by pool and workers
+    // 最高位为1
     static final int DONE_MASK   = 0xf0000000;  // mask out non-completion bits
+    // 正常完成
     static final int NORMAL      = 0xf0000000;  // must be negative
+    // 任务被取消了
     static final int CANCELLED   = 0xc0000000;  // must be < NORMAL
+    // 任务异常终止
     static final int EXCEPTIONAL = 0x80000000;  // must be < CANCELLED
+    // 某个任务在等待当前任务执行完成，需要在任务结束时唤醒等待的线程
     static final int SIGNAL      = 0x00010000;  // must be >= 1 << 16
+    // 获取低16位的值
     static final int SMASK       = 0x0000ffff;  // short bits for tags
 
     /**
@@ -439,7 +437,7 @@ public abstract class ForkJoinTask<V> implements Future<V>, Serializable {
      */
     static final class ExceptionNode extends WeakReference<ForkJoinTask<?>> {
         final Throwable ex;
-        ExceptionNode next;
+        ExceptionNode next; // next将多个ExceptionNode构成一个链表
         final long thrower;  // use id not ref to avoid weak cycles
         final int hashCode;  // store task hashCode before weak ref disappears
         ExceptionNode(ForkJoinTask<?> task, Throwable ex, ExceptionNode next) {
