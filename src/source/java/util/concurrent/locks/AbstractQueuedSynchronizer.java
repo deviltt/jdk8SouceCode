@@ -756,11 +756,21 @@ public abstract class AbstractQueuedSynchronizer
          */
         for (; ; ) {
             Node h = head;
+            /*
+             h!=null && h!=tail说明此时CLH队列中至少有两个节点（包括空节点），
+             即至少含有一个真正在等待着的节点
+             */
             if (h != null && h != tail) {
                 int ws = h.waitStatus;
                 if (ws == Node.SIGNAL) {
+                    /*
+                    因为下面要唤醒一个节点，所以将头节点的状态SIGNAL改为0（因为SIGNAL表示的是下一个节点是阻塞状态）
+                    记住只有当前节点的上一个节点状态是SIGNAL，当前节点才能放心的休眠，所以SIGNAL表示的是下一个节点是阻塞状态
+                    如果CAS没有成功，就继续尝试
+                     */
                     if (!compareAndSetWaitStatus(h, Node.SIGNAL, 0))
                         continue;            // loop to recheck cases
+                    // 唤醒下一个可以被唤醒的节点
                     unparkSuccessor(h);
                 } else if (ws == 0 &&
                         !compareAndSetWaitStatus(h, 0, Node.PROPAGATE))
@@ -1143,6 +1153,7 @@ public abstract class AbstractQueuedSynchronizer
      */
     private void doAcquireSharedInterruptibly(int arg)
             throws InterruptedException {
+        // CLH队列尾加入一个新的共享节点
         final Node node = addWaiter(Node.SHARED);   // 将共享模式节点添加到尾部
         boolean failed = true;
         try {
@@ -1150,8 +1161,17 @@ public abstract class AbstractQueuedSynchronizer
                 // 获取当前节点的前一个节点
                 final Node p = node.predecessor();
                 if (p == head) {    // 如果当前节点的前一个节点是头节点
+                    /*
+                    和独占模式一样，只有前一个节点是头节点，也就是当前节点是实际上的
+                    第一个等待着的节点的时候才尝试获取资源（FIFO）
+                     */
                     int r = tryAcquireShared(arg);
                     if (r >= 0) {   // 如果剩余state的个数大于0
+                        /*
+                        r大于等于0说明此时还有锁资源（等于0说明锁资源被当前线程拿走后就没了），
+                        设置头节点，并且通知后面的节点也获取锁资源。独占锁和共享锁的差一点就在于此，
+                        共享锁在前一个节点获取资源后，会通知后续的节点也一起来获取
+                         */
                         setHeadAndPropagate(node, r);
                         p.next = null; // help GC
                         failed = false;
@@ -1479,10 +1499,12 @@ public abstract class AbstractQueuedSynchronizer
      */
     public final void acquireSharedInterruptibly(int arg)
             throws InterruptedException {
+        // 如果当前线程已经中断了，直接抛出异常。因为被中断了就没有意义再去获取锁资源了
         if (Thread.interrupted())
             throw new InterruptedException();
+        // 尝试去获取共享资源
         if (tryAcquireShared(arg) < 0)  // 如果剩余可用state小于0，小于0说明需要排队
-            //
+            // 获取资源失败的话，进CLH队列进行排队等待
             doAcquireSharedInterruptibly(arg);
     }
 

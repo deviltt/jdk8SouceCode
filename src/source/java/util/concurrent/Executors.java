@@ -34,15 +34,12 @@
  */
 
 package java.util.concurrent;
-import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.security.AccessControlContext;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
-import java.security.PrivilegedExceptionAction;
-import java.security.PrivilegedActionException;
-import java.security.AccessControlException;
 import sun.security.util.SecurityConstants;
+
+import java.security.*;
+import java.util.Collection;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Factory and utility methods for {@link Executor}, {@link
@@ -601,6 +598,9 @@ public class Executors {
 
         DefaultThreadFactory() {
             SecurityManager s = System.getSecurityManager();
+            // 如果启动了安全管理器，则不为null
+            // 可以通过配置java参数启动 -Djava.security.manager -Djava.security.policy="D:/java.policy"
+            // 如果启动了安全管理器，就用安全管理器的线程组，如果没有就是用当前线程的线程组
             group = (s != null) ? s.getThreadGroup() :
                                   Thread.currentThread().getThreadGroup();
             namePrefix = "pool-" +

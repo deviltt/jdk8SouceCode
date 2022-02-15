@@ -178,6 +178,10 @@ public class Semaphore implements java.io.Serializable {
             for (;;) {
                 int available = getState();
                 int remaining = available - acquires;
+                /*
+                1.剩余资源小于0
+                2.CAS设置设置remaining成功了的话，退出死循环
+                 */
                 if (remaining < 0 ||
                     compareAndSetState(available, remaining))
                     // 如果remaining小于0，说明需要将其拿出去，加入到条件队列中

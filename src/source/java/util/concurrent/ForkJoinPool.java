@@ -1511,6 +1511,8 @@ public class ForkJoinPool extends AbstractExecutorService {
      * count has already been incremented as a reservation.  Invokes
      * deregisterWorker on any failure.
      *
+     * 创建新的Worker，如果创建失败或者启动执行异常则通过deregisterWorker方法通知线程池将其解除注册
+     *
      * @return true if successful
      */
     private boolean createWorker() {
@@ -1519,12 +1521,13 @@ public class ForkJoinPool extends AbstractExecutorService {
         ForkJoinWorkerThread wt = null;
         try {
             if (fac != null && (wt = fac.newThread(this)) != null) {
-                wt.start();
+                wt.start(); // 通过ThreadFactory创建一个新的Worker，并启动线程的执行
                 return true;
             }
         } catch (Throwable rex) {
             ex = rex;
         }
+        // 创建的过程中有异常，通知线程池将其解除注册
         deregisterWorker(wt, ex);
         return false;
     }
@@ -1533,6 +1536,8 @@ public class ForkJoinPool extends AbstractExecutorService {
      * Tries to add one worker, incrementing ctl counts before doing
      * so, relying on createWorker to back out on failure.
      *
+     * 尝试增加新线程
+     *
      * @param c incoming ctl value, with total count negative and no
      * idle workers.  On CAS failure, c is refreshed and retried if
      * this holds (otherwise, a new worker is not needed).
@@ -1540,16 +1545,18 @@ public class ForkJoinPool extends AbstractExecutorService {
     private void tryAddWorker(long c) {
         boolean add = false;
         do {
+            // AC和TC都加1
             long nc = ((AC_MASK & (c + AC_UNIT)) |
                        (TC_MASK & (c + TC_UNIT)));
-            if (ctl == c) {
+            if (ctl == c) { // 如果ctl未变更
                 int rs, stop;                 // check if terminating
-                if ((stop = (rs = lockRunState()) & STOP) == 0)
+                if ((stop = (rs = lockRunState()) & STOP) == 0) // 加锁成功且线程池未终止，则修改ctl
                     add = U.compareAndSwapLong(this, CTL, c, nc);
-                unlockRunState(rs, rs & ~RSLOCK);
-                if (stop != 0)
+                unlockRunState(rs, rs & ~RSLOCK);   // 解锁
+                if (stop != 0)  // 如果线程池已终止，则终止while循环
                     break;
                 if (add) {
+                    // ctl修改成功，创建新的Worker
                     createWorker();
                     break;
                 }
@@ -1658,35 +1665,53 @@ public class ForkJoinPool extends AbstractExecutorService {
 
     /**
      * Tries to create or activate a worker if too few are active.
+     * 如果当前总的线程数小于parallelism，则signalWork会尝试创建新的Worker线程
+     * 如果当前有空闲的Worker线程，则尝试唤醒一个，如果没有空闲的则直接返回
      *
      * @param ws the worker array to use to find signallees
      * @param q a WorkQueue --if non-null, don't retry if now empty
      */
     final void signalWork(WorkQueue[] ws, WorkQueue q) {
         long c; int sp, i; WorkQueue v; Thread p;
+        // ctl初始化时使用 -parallelism，为负值表示活跃的线程数小于线程池初始化时设置的并行度要求
         while ((c = ctl) < 0L) {                       // too few active
+            // 取低32位的值，如果为0，则活跃线程数等于总的线程数，即没有空闲的线程数
             if ((sp = (int)c) == 0) {                  // no idle workers
+                // 不等于0，说明总的线程数小于parallelism属性，可以新增线程
                 if ((c & ADD_WORKER) != 0L)            // too few workers
-                    tryAddWorker(c);
+                    tryAddWorker(c);    // 尝试创建新线程
                 break;
             }
+            // sp不等于0，即有空闲的线程，sp等于ctl的低32位
+            // ctl的最低16位保存最近空闲的Worker线程关联的WorkQueue在数组中的索引
             if (ws == null)                            // unstarted/terminated
+                // 线程池未初始化或者已终止
                 break;
             if (ws.length <= (i = sp & SMASK))         // terminated
+                // 线程池已终止
                 break;
             if ((v = ws[i]) == null)                   // terminating
+                // 线程池在终止的过程中
                 break;
             int vs = (sp + SS_SEQ) & ~INACTIVE;        // next scanState
             int d = sp - v.scanState;                  // screen CAS
+            // AC加1，UC_MASK取高32位的值，SP_MASK取低32位的值
+            // stackPred是v被标记成INACTIVE时ctl的低32位，可能保存着在v之前空闲的WorkQueue在数组中的索引
             long nc = (UC_MASK & (c + AC_UNIT)) | (SP_MASK & v.stackPred);
             if (d == 0 && U.compareAndSwapLong(this, CTL, c, nc)) {
+                // d等于0说明WorkQueue v关联的Worker是最近才空闲的
+                // 修改ctl属性成功
+                // 将WorkQueue v标记成已激活
                 v.scanState = vs;                      // activate v
                 if ((p = v.parker) != null)
-                    U.unpark(p);
+                    U.unpark(p);    // 唤醒等待的线程
                 break;
             }
+            // 如果d不等于0或者上述CAS修改失败，即已经有一个空闲Worker被其他线程给激活了
             if (q != null && q.base == q.top)          // no more work
+                // 任务队列为空，没有待执行的任务了，不需要激活空闲Worker或者创建新线程了
                 break;
+            // 如果if不成立则继续下一次for循环
         }
     }
 
@@ -2435,23 +2460,40 @@ public class ForkJoinPool extends AbstractExecutorService {
     final void externalPush(ForkJoinTask<?> task) {
         WorkQueue[] ws; WorkQueue q; int m;
         int r = ThreadLocalRandom.getProbe();
-        int rs = runState;
+        int rs = runState;  // runState的初始值为0
+        // 如果workQueues非空（该属性默认值为null），说明线程池已经初始化
+        // workQueues的长度 >= 1，即m等于任务队列数组的长度减一
+        // 计算存放任务的workQueue，如果对应的workQueue非空
+        // r!=0说明当前线程的Prope属性已经初始化
+        // rs > 0 说明线程池已经初始化且是正常运行的
+        // 对WorkQueue加锁成功，QLOCK是WorkQueue里面的一个属性，long类型
         if ((ws = workQueues) != null && (m = (ws.length - 1)) >= 0 &&
             (q = ws[m & r & SQMASK]) != null && r != 0 && rs > 0 &&
             U.compareAndSwapInt(q, QLOCK, 0, 1)) {
             ForkJoinTask<?>[] a; int am, n, s;
+            // WorkQueue里面的ForkJoinTask数组非空
+            // am = WorkQueue里面ForkJoinTask数组的长度
+            // n = 已经使用的容量
+            // am > n，说明WorkQueue的ForkJoinTask数组还有可用空间
             if ((a = q.array) != null &&
                 (am = a.length - 1) > (n = (s = q.top) - q.base)) {
+                // 计算保存的位置并保存到数组中
                 int j = ((am & s) << ASHIFT) + ABASE;
                 U.putOrderedObject(a, j, task);
+                // WorkQueue的qtop值加一
                 U.putOrderedInt(q, QTOP, s + 1);
+                // WorkQueue解锁
                 U.putIntVolatile(q, QLOCK, 0);
                 if (n <= 1)
+                    // 原任务队列是空的，此时新增了一个任务，则尝试新增Worker或者唤醒空闲的Worker
                     signalWork(ws, q);
                 return;
             }
+            // WorkQueue解锁，if分支里面也会解锁然后return，如果没有走到if分支，这里需进行解锁
             U.compareAndSwapInt(q, QLOCK, 1, 0);
         }
+        // 初始化调用线程的Probe，线程池和关联的WorkerQueue
+        // 如果已初始化，则将任务保存到WorkQueue中
         externalSubmit(task);
     }
 

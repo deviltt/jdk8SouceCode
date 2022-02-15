@@ -528,6 +528,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
         final boolean claim() {
             Executor e = executor;
             if (compareAndSetForkJoinTaskTag((short)0, (short)1)) {
+                // 第一次进来的时候 e 不为null，然后执行UniApply的run方法，再进到这里是e为null，就返回ture
                 if (e == null)
                     return true;
                 executor = null; // disable
@@ -586,6 +587,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
         }
         final CompletableFuture<V> tryFire(int mode) {
             CompletableFuture<V> d; CompletableFuture<T> a;
+            // d = dep，把依赖传递给d，上一个Completable传递给a
             if ((d = dep) == null ||
                 !d.uniApply(a = src, fn, mode > 0 ? null : this))
                 return null;
@@ -611,6 +613,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
             try {
                 if (c != null && !c.claim())
                     return false;
+                // 把上一个结果传递给当前func
                 @SuppressWarnings("unchecked") S s = (S) r;
                 completeValue(f.apply(s));
             } catch (Throwable ex) {
@@ -645,6 +648,8 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
                 !d.uniAccept(a = src, fn, mode > 0 ? null : this))
                 return null;
             dep = null; src = null; fn = null;
+            // postFile的返回值为dep(即下一个CompletableFuture)或者是null
+            // 也就印证了tryFile的作用是传播下一个dep，如果没有就返回null
             return d.postFire(a, mode);
         }
     }

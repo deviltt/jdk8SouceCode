@@ -172,17 +172,22 @@ public class SynchronousQueue<E> extends AbstractQueue<E>
          * @param e if non-null, the item to be handed to a consumer;
          *          if null, requests that transfer return an item
          *          offered by producer.
+         *          e如果非null，这个元素将会被交给一个消费线程
+         *          如果为null，则请求一个被生产者提交的元素
          * @param timed if this operation should timeout
          * @param nanos the timeout, in nanoseconds
          * @return if non-null, the item provided or received; if null,
          *         the operation failed due to timeout or interrupt --
          *         the caller can distinguish which of these occurred
          *         by checking Thread.interrupted.
+         *         返回元素非空，那么元素被提交或者被接受了
+         *         如果为null，这个操作可能因为超时或中断失败了
          */
         abstract E transfer(E e, boolean timed, long nanos);
     }
 
     /** The number of CPUs, for spin control */
+    // Java虚拟机可用的处理器数量
     static final int NCPUS = Runtime.getRuntime().availableProcessors();
 
     /**
@@ -191,6 +196,8 @@ public class SynchronousQueue<E> extends AbstractQueue<E>
      * variety of processors and OSes. Empirically, the best value
      * seems not to vary with number of CPUs (beyond 2) so is just
      * a constant.
+     * 在阻塞前自旋的次数，如果可用处理器的数量只有1个，那就不允许自旋，因为自旋会导致其它线程长时间获取不到cpu，饿死
+     * 如果大于两个，允许自旋32次
      */
     static final int maxTimedSpins = (NCPUS < 2) ? 0 : 32;
 
@@ -348,17 +355,19 @@ public class SynchronousQueue<E> extends AbstractQueue<E>
              */
 
             SNode s = null; // constructed/reused as needed
+            // 如果传参e为null，则表示请求获取一个元素，否则表示插入一个元素
             int mode = (e == null) ? REQUEST : DATA;
 
             for (;;) {
                 SNode h = head;
                 if (h == null || h.mode == mode) {  // empty or same-mode
                     if (timed && nanos <= 0) {      // can't wait
+                        // timed为true且nanos=0则立马返回
                         if (h != null && h.isCancelled())
                             casHead(h, h.next);     // pop cancelled node
                         else
                             return null;
-                    } else if (casHead(h, s = snode(s, e, h, mode))) {
+                    } else if (casHead(h, s = snode(s, e, h, mode))) {  // 构造一个节点并且设置为头节点
                         SNode m = awaitFulfill(s, timed, nanos);
                         if (m == s) {               // wait was cancelled
                             clean(s);
@@ -668,12 +677,15 @@ public class SynchronousQueue<E> extends AbstractQueue<E>
              */
 
             QNode s = null; // constructed/reused as needed
+            // isData为true说明是put操作，是生产者
+            // isData为false说明是take操作，是消费者
             boolean isData = (e != null);
 
             for (;;) {
                 QNode t = tail;
                 QNode h = head;
                 if (t == null || h == null)         // saw uninitialized value
+                    // 如果还未进行初始化，自旋
                     continue;                       // spin
 
                 if (h == t || t.isData == isData) { // empty or same-mode
@@ -1149,9 +1161,13 @@ public class SynchronousQueue<E> extends AbstractQueue<E>
 
     @SuppressWarnings("serial")
     static class WaitQueue implements java.io.Serializable { }
+
+    // 后进先出栈
     static class LifoWaitQueue extends WaitQueue {
         private static final long serialVersionUID = -3633113410248163686L;
     }
+
+    // 先进先出队列
     static class FifoWaitQueue extends WaitQueue {
         private static final long serialVersionUID = -3623113410248163686L;
     }
