@@ -1018,6 +1018,10 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
                     // shut down before lock acquired.
                     int rs = runStateOf(ctl.get());
 
+                    /*
+                    1. 线程池状态小于SHUTDOWN
+                    2. 线程池状态刚好等于SHUTDOWN，创建了非核心线程，已经调用workQueue.offer加入任务队列
+                     */
                     if (rs < SHUTDOWN ||
                             (rs == SHUTDOWN && firstTask == null)) {
                         if (t.isAlive()) // precheck that t is startable
@@ -1212,24 +1216,38 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
         Thread wt = Thread.currentThread();
         Runnable task = w.firstTask;    // firstTask实际上是我们自己要执行的任务
         w.firstTask = null;
+        /*
+         *   这里不是解锁操作，这里是为了设置state = 0 以及 ExclusiveOwnerThread = null.因为起始状态state = -1,
+         *   不允许任何线程抢占锁，这里就是初始化操作。
+         */
         w.unlock(); // allow interrupts
+        /*
+         * 表示是否突然退出标志位，
+         * true->  发生异常了，当前线程突然退出，后面会做处理
+         * false-> 正常退出
+         */
         boolean completedAbruptly = true;
         try {
             while (task != null || (task = getTask()) != null) {
+                // 线程池只有这个地方会调用lock方法锁住
+                // lock的作用就是标识当前Worker正处于非空闲状态，可通过tryLock的返回值判断Worker是否空闲
                 w.lock();   // 在执行task前，要先将worker锁住
                 // If pool is stopping, ensure thread is interrupted;
                 // if not, ensure thread is not interrupted.  This
                 // requires a recheck in second case to deal with
                 // shutdownNow race while clearing interrupt
+                // Thread.interrupted清除中断标志位
                 if ((runStateAtLeast(ctl.get(), STOP) ||
                         (Thread.interrupted() &&
                                 runStateAtLeast(ctl.get(), STOP))) &&
                         !wt.isInterrupted())
                     wt.interrupt();
                 try {
+                    // 钩子扩展方法，留给子类实现
                     beforeExecute(wt, task);
                     Throwable thrown = null;
                     try {
+                        // 执行真正提交的任务
                         task.run();
                     } catch (RuntimeException x) {
                         thrown = x;
@@ -1241,16 +1259,26 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
                         thrown = x;
                         throw new Error(x);
                     } finally {
+                        // 钩子扩展方法，留给子类实现
                         afterExecute(task, thrown);
                     }
                 } finally {
-                    task = null;
+                    task = null;    // 执行完后将task设置为null，下次就会调用getTask从workQueue中获取任务
                     w.completedTasks++;
                     w.unlock();
                 }
             }
+            /*
+             * 什么情况下，回来到这里？
+             * 当getTask()返回NULL时，说明当前线程应该执行退出逻辑了。。
+             */
             completedAbruptly = false;
         } finally {
+            /*
+             *  task.run()内部抛出异常，直接从w.unlock那里跳到这一行。
+             *  正常退出：completedAbruptly = false
+             *  异常退出：completedAbruptly = true。
+             */
             processWorkerExit(w, completedAbruptly);
         }
     }
@@ -1479,6 +1507,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
                 reject(command);
             else if (workerCountOf(recheck) == 0)
                 // 线程池为RUNNING状态，且工作线程数为0
+                // 当corePoolSize配置为0且有任务进来的时候，创建一个非核心线程
                 addWorker(null, false);
         } else if (!addWorker(command, false))
             // 如果workQueue已经满了，则会offer失败，然后addWorker又返回false，就会走到这
