@@ -558,6 +558,7 @@ public abstract class AbstractQueuedSynchronizer
     /**
      * The synchronization state.
      * 被抢占锁的状态
+     * 队列的头节点会持有同步状态的标志
      */
     private volatile int state;
 
@@ -608,9 +609,10 @@ public abstract class AbstractQueuedSynchronizer
     /**
      * Inserts node into queue, initializing if necessary. See picture above.
      * <p>
+     * 功能：将新节点添加到队列的尾部，并返回尾节点的前一个节点
      * 注意这个方法返回的是尾节点的前一个节点
      *
-     * @param node the node to insert
+     * @param node the node to insert 需要添加到AQS的节点，这个节点的thread就是当前线程
      * @return node's predecessor
      */
     private Node enq(final Node node) {
@@ -647,7 +649,7 @@ public abstract class AbstractQueuedSynchronizer
      * 在CLH队列中添加一个新的独占尾节点
      *
      * @param mode Node.EXCLUSIVE for exclusive, Node.SHARED for shared
-     * @return the new node
+     * @return the new node 返回值是新添加的节点
      */
     private Node addWaiter(Node mode) {
         // Node node = new Node(Thread, mode) 说明一个线程代表一个节点
@@ -670,7 +672,7 @@ public abstract class AbstractQueuedSynchronizer
         /*
         走到这步有两种可能：
         1.尾节点为空（即此时队列为空），需要将队列初始化后插入当前节点
-        2.在第652行CAS失败后，会进入enq兜底方法
+        2.在第664行CAS失败后，会进入enq兜底方法
          */
         enq(node);
         return node;
@@ -911,6 +913,9 @@ public abstract class AbstractQueuedSynchronizer
      * Returns true if thread should block. This is the main signal
      * control in all acquire loops.  Requires that pred == node.prev.
      *
+     * 只有前驱节点的waitStatus <= 0的时候，当前线程才能够安心的休眠
+     *
+     *
      * @param pred node's predecessor holding status node的前继节点
      * @param node the node 当前node节点
      * @return {@code true} if thread should block
@@ -925,7 +930,7 @@ public abstract class AbstractQueuedSynchronizer
              * to signal it, so it can safely park.
              */
             return true;
-        if (ws > 0) {
+        if (ws > 0) {   // 当前来看，状态大于0的说明是CANCEL
             /*
              * Predecessor was cancelled. Skip over predecessors and
              * indicate retry.
@@ -939,7 +944,7 @@ public abstract class AbstractQueuedSynchronizer
             } while (pred.waitStatus > 0);
             // 跳出循环只有两种情况，小于0或者等于0
             // 等于0，那肯定是一直找到头节点了
-            // 小于0则是找到了最后一个waitStatus是-1的节点
+            // 小于0则是找到了第一个waitStatus=0的前驱节点
             pred.next = node;
         } else {
             /*
@@ -1014,7 +1019,9 @@ public abstract class AbstractQueuedSynchronizer
                 队列中只有第一个节点才有资格去尝试获取锁资源，如果获取到了就不用被阻塞了
                 获取到了说明在此刻，之前的资源已经被释放了（state被置为了0）
                  */
-                if (p == head && tryAcquire(arg)) { // 如果node的前继节点是head，并且tryAcquire获取锁成功
+                // 进入到这说明之前tryAcquire返回的false，这里相当于在park前再给一次机会，如果还不能够获取同步状态，就走下面的流程去park
+                // 如果恰好获取到了，就将原头节点切到当前node，原来的头节点释放掉
+                if (p == head && tryAcquire(arg)) { // 如果node的前继节点是head，则尝试获取同步状态
                     /*
                     头指针指向当前节点，意味着该节点 将 变成一个空节点（头节点永远会指向一个空节点）
                     因为在上一行tryAcquire方法已经成功的情况下，就可以释放CLH中的该节点了
@@ -1047,22 +1054,28 @@ public abstract class AbstractQueuedSynchronizer
 
     /**
      * Acquires in exclusive interruptible mode.
+     * 如果线程是由于中断唤醒的，那就会在醒来的时候判断中断标志位，返回true
+     * 然后会抛出InterruptException异常
+     * 区别于acquireQueued方法
      *
      * @param arg the acquire argument
      */
     private void doAcquireInterruptibly(int arg)
             throws InterruptedException {
+        // 以EXCLUSIVE的形式，将当前线程封装为Node后添加到AQS的尾部
         final Node node = addWaiter(Node.EXCLUSIVE);
         boolean failed = true;
         try {
             for (; ; ) {
                 final Node p = node.predecessor();
+                // 这里tryAcquire的作用就是在park前再给一次机会调用tryAcquire获取同步状态
                 if (p == head && tryAcquire(arg)) {
                     setHead(node);
                     p.next = null; // help GC
                     failed = false;
                     return;
                 }
+                // 如果前驱节点不是头节点
                 if (shouldParkAfterFailedAcquire(p, node) &&
                         parkAndCheckInterrupt())
                     throw new InterruptedException();
@@ -1097,8 +1110,14 @@ public abstract class AbstractQueuedSynchronizer
                     return true;
                 }
                 nanosTimeout = deadline - System.nanoTime();
+                // deadline <= System.nanoTime，说明当前时间已经超时了
                 if (nanosTimeout <= 0L)
                     return false;
+                // 如果还没到spinForTimeoutThreshold的时间范围内，那就先不调park，自旋
+                // now1----now2---spinForTimeout---now3---deadline
+                // deadline - now1 > spinForTimeout 自旋
+                // deadline - now2 > spinForTimeout 自旋
+                // deadline - now3 < spinForTimeout park阻塞
                 if (shouldParkAfterFailedAcquire(p, node) &&
                         nanosTimeout > spinForTimeoutThreshold)
                     LockSupport.parkNanos(this, nanosTimeout);
@@ -1382,6 +1401,9 @@ public abstract class AbstractQueuedSynchronizer
      */
     public final void acquire(int arg) {
         // 首先尝试获取资源，如果失败了就添加一个新的独占节点，插入到CLH队列尾部
+        // 1.尝试获取锁
+        // 2.获取锁失败，就尝试添加到队列种
+        // 3.添加到队列后，
         if (!tryAcquire(arg) &&
                 acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
             /*
