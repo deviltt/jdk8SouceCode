@@ -189,14 +189,33 @@ public class ExecutorCompletionService<V> implements CompletionService<V> {
         return f;
     }
 
+    /**
+     * take方法当队列中没有元素的时候会阻塞，直到队列中有元素位置
+     *
+     * @return
+     * @throws InterruptedException
+     */
     public Future<V> take() throws InterruptedException {
         return completionQueue.take();
     }
 
+    /**
+     * poll方法不会阻塞，如果队列中没有元素就直接返回null
+     *
+     * @return
+     */
     public Future<V> poll() {
         return completionQueue.poll();
     }
 
+    /**
+     * 这个方法如果timeout时间后仍然没有返回future，则会返回null
+     *
+     * @param timeout 超时时长
+     * @param unit 超时单位
+     * @return Future
+     * @throws InterruptedException 中断异常
+     */
     public Future<V> poll(long timeout, TimeUnit unit)
             throws InterruptedException {
         return completionQueue.poll(timeout, unit);
