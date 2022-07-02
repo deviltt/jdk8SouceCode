@@ -939,6 +939,7 @@ public abstract class AbstractQueuedSynchronizer
                 /*
                 从该节点向前寻找一个不是CANCELED状态的节点（也就是处于正常阻塞状态的节点），
                 遍历过程中如果遇到了CANCELED节点，CANCELED的节点会被剔除CLH队列等待Gc
+                前驱节点是SIGNAL状态的时候，当前节点才能安心的 park 休眠
                  */
                 node.prev = pred = pred.prev;
             } while (pred.waitStatus > 0);
